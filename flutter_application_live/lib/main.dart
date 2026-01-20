@@ -1,3 +1,6 @@
+import 'dart:convert'; // Для обробки тексту від ШІ
+import 'dart:async'; // Для TimeoutException
+import 'package:http/http.dart' as http; // Для зв'язку з інтернетом
 import 'package:flutter/material.dart';
 
 void main() => runApp(Flutter_aplication_live());
@@ -13,6 +16,9 @@ class Flutter_aplication_live extends StatelessWidget {
 }
 
 class LoginScreen extends StatelessWidget {
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -24,12 +30,17 @@ class LoginScreen extends StatelessWidget {
             children: [
               Text("Leblings", style: TextStyle(fontSize: 30)),
               SizedBox(height: 20),
-              TextField(decoration: InputDecoration(labelText: "Email")),
-              TextField(decoration: InputDecoration(labelText: "Password"), obscureText: true),
+              TextField(controller: _emailController, decoration: InputDecoration(labelText: "Email")),
+              TextField(controller: _passwordController, decoration: InputDecoration(labelText: "Password"), obscureText: true),
               SizedBox(height: 20),
               ElevatedButton(
                 child: Text("Register"),
-                onPressed: () { Navigator.push(context, MaterialPageRoute(builder: (context) => SurveyScreen()));
+                onPressed: () {
+                  if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Будь ласка, введіть Email та пароль")));
+                    return;
+                  }
+                  Navigator.push(context, MaterialPageRoute(builder: (context) => SurveyScreen()));
                    // Тут ми потім вставимо перехід
                 }
               )
@@ -123,9 +134,11 @@ class _SurveyScreenState extends State<SurveyScreen> {
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey),
                 child: Text("Створити цифровий образ", style: TextStyle(color: Colors.white, fontSize: 16)),
-                onPressed: () { Navigator.push(context, MaterialPageRoute(builder: (context) => SurveyScreen()));
-                  // Коли натискаємо цю кнопку, ми переходимо до Чату (День 5)
-                  // Ми передаємо введене ім'я на наступний екран
+                onPressed: () {
+                  if (_nameController.text.isEmpty || _yearsController.text.isEmpty || _bioController.text.isEmpty || _styleController.text.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Будь ласка, заповніть всі поля анкети")));
+                    return;
+                  }
                   Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -161,26 +174,72 @@ class _ChatScreenState extends State<ChatScreen> {
   // Список повідомлень. Кожне повідомлення має текст і позначку, хто його надіслав.
   final List<Map<String, dynamic>> _messages = [];
 
-  void _sendMessage() {
-    if (_messageController.text.isEmpty) return;
+  // --- OLLAMA (ЛОКАЛЬНО) ---
+  Future<String> getAIResponse(String userMessage) async {
+    var url = Uri.parse("http://localhost:11434/api/chat");
 
-    setState(() {
-      // 1. Додаємо ваше повідомлення в список
-      _messages.insert(0, {
-        "text": _messageController.text,
-        "isUser": true,
-      });
+    try {
+      var response = await http.post(
+        url,
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: jsonEncode({
+          "model": "llama2",
+          "messages": [
+            {
+              "role": "system", 
+              "content": "Ти — цифровий образ людини на ім'я ${widget.name}. Твої спогади: ${widget.description}. Відповідай як ця людина. Будь дружелюбна та теплою."
+            },
+            {"role": "user", "content": userMessage}
+          ],
+          "stream": false
+        }),
+      ).timeout(Duration(seconds: 60));
 
-      // 2. Імітуємо відповідь (на 11 день тут буде справжній ШІ)
-      _messages.insert(0, {
-        "text": "Я пам'ятаю про це, дякую що написав. Я завжди поруч, твій ${widget.name}.",
-        "isUser": false,
-      });
-    });
-
-    _messageController.clear(); // Очищуємо поле вводу
+      if (response.statusCode == 200) {
+        var data = jsonDecode(utf8.decode(response.bodyBytes));
+        print("✅ Відповідь від Ollama: $data");
+        
+        if (data['message'] != null && data['message']['content'] != null) {
+          return data['message']['content'];
+        } else {
+          return "❌ Немає відповіді від Ollama";
+        }
+      } else {
+        var errorBody = utf8.decode(response.bodyBytes);
+        print("❌ Помилка від Ollama: $errorBody");
+        return "❌ Помилка від Ollama:\nHTTP ${response.statusCode}";
+      }
+    } on TimeoutException {
+      return "❌ Таймаут: Ollama занадто довго відповідає (>60 сек)\nПереконайтеся, що сервер запущений: ollama serve";
+    } catch (e) {
+      print("❌ Помилка підключення: $e");
+      return "❌ Не вдалося з'єднатися з Ollama на localhost:11434\nЗапустіть: ollama serve";
+    }
   }
 
+  // Далі йде ваш старий метод _sendMessage
+  void _sendMessage() async {
+    if (_messageController.text.isEmpty) return;
+    
+    String userText = _messageController.text;
+
+    setState(() {
+      // Додаємо ваше повідомлення
+      _messages.insert(0, {"text": userText, "isUser": true});
+    });
+
+    _messageController.clear();
+
+    // Отримуємо реальну відповідь від ШІ
+    String aiResponse = await getAIResponse(userText);
+
+    setState(() {
+      // Додаємо відповідь від ШІ
+      _messages.insert(0, {"text": aiResponse, "isUser": false});
+    });
+  }
   @override
   Widget build(BuildContext context) {
     return Scaffold(
